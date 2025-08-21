@@ -19,82 +19,11 @@ BOT_TOKEN = "8249045464:AAEN5I2fPTRV6mcahJ41UD3tU1iGQckhw5s"
 SESSIONS_DIR = "sessions"   # folder where .session files are stored
 API_ID = 94575
 API_HASH = "a3406de8d171bb422bb6ddf3bbd800e2"
+os.makedirs(SESSIONS_DIR, exist_ok=True)
 
-# In-memory user flow data
 user_data = {}
 
-# Start command
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    keyboard = [[InlineKeyboardButton("🚨 Get User Report", callback_data="get_report")]]
-    await update.message.reply_text("Welcome! Choose an option:", reply_markup=InlineKeyboardMarkup(keyboard))
-
-# Callback handler
-async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-
-    if query.data == "get_report":
-        user_data[query.from_user.id] = {}
-        await query.message.reply_text("Send the @username or profile link of the user to report:")
-
-# Username capture
-async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    uid = update.message.from_user.id
-    if uid in user_data and "username" not in user_data[uid]:
-        user_data[uid]["username"] = update.message.text.strip()
-
-        keyboard = [
-            [InlineKeyboardButton("Spam", callback_data="reason_spam")],
-            [InlineKeyboardButton("Fake", callback_data="reason_fake")],
-            [InlineKeyboardButton("Violence", callback_data="reason_violence")],
-            [InlineKeyboardButton("Pornography", callback_data="reason_porn")],
-            [InlineKeyboardButton("Child Abuse", callback_data="reason_child")],
-            [InlineKeyboardButton("Copyright", callback_data="reason_copyright")],
-            [InlineKeyboardButton("Other", callback_data="reason_other")]
-        ]
-        await update.message.reply_text("Choose the report reason:", reply_markup=InlineKeyboardMarkup(keyboard))
-
-    elif uid in user_data and "reason" in user_data[uid] and "message" not in user_data[uid]:
-        # format: "Message | Count"
-        parts = update.message.text.strip().split("|")
-        if len(parts) < 2:
-            await update.message.reply_text("⚠️ Please send in this format:\n\nReportMessage | NumberOfReports")
-            return
-        user_data[uid]["message"] = parts[0].strip()
-        try:
-            user_data[uid]["count"] = int(parts[1].strip())
-        except:
-            await update.message.reply_text("⚠️ Please enter a valid number after |")
-            return
-
-        await update.message.reply_text("✅ Report started in background... you will receive live responses here.")
-
-        # background task
-        asyncio.create_task(send_reports(uid, update, context))
-
-# Reason selection
-async def reason_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-
-    uid = query.from_user.id
-    reason_map = {
-        "reason_spam": InputReportReasonSpam(),
-        "reason_fake": InputReportReasonFake(),
-        "reason_violence": InputReportReasonViolence(),
-        "reason_porn": InputReportReasonPornography(),
-        "reason_child": InputReportReasonChildAbuse(),
-        "reason_copyright": InputReportReasonCopyright(),
-        "reason_other": InputReportReasonOther()
-    }
-    user_data[uid]["reason"] = reason_map[query.data]
-
-    if query.data == "reason_other":
-        await query.message.reply_text("Please type your custom reason:")
-    else:
-        await query.message.reply_text("Now send the report message followed by count.\n\nFormat:\n`Report Message | NumberOfReports`")
-
-# Actual reporting in background
+# ---------------- Report Sender ----------------
 async def send_reports(uid, update: Update, context: ContextTypes.DEFAULT_TYPE):
     data = user_data[uid]
     target = data["username"]
@@ -110,10 +39,15 @@ async def send_reports(uid, update: Update, context: ContextTypes.DEFAULT_TYPE):
         for i in range(count):
             try:
                 resp = await client(ReportPeerRequest(peer=target, reason=reason, message=msg))
-                # اصل response LIVE بھیجیں
+                # --- اصل response دکھاؤ ---
+                if hasattr(resp, "to_dict"):
+                    resp_text = str(resp.to_dict())
+                else:
+                    resp_text = str(resp)
+
                 await context.bot.send_message(
                     chat_id=update.effective_chat.id,
-                    text=f"[{sess}] Report {i+1}/{count}:\n{resp.to_dict()}"
+                    text=f"[{sess}] Report {i+1}/{count}:\n{resp_text}"
                 )
             except Exception as e:
                 await context.bot.send_message(
@@ -123,18 +57,74 @@ async def send_reports(uid, update: Update, context: ContextTypes.DEFAULT_TYPE):
             await asyncio.sleep(5)  # delay between each report
         await client.disconnect()
 
-    await context.bot.send_message(chat_id=update.effective_chat.id, text="✅ All reports finished.")
+# ---------------- Bot Handlers ----------------
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    keyboard = [[InlineKeyboardButton("📣 Get User Report", callback_data="get_report")]]
+    await update.message.reply_text("👋 Welcome! Select an option:", 
+                                    reply_markup=InlineKeyboardMarkup(keyboard))
 
-# Main bot runner
+async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    uid = query.from_user.id
+
+    if query.data == "get_report":
+        user_data[uid] = {}
+        await query.message.reply_text("🔎 Send the username or user URL to report:")
+
+async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    uid = update.message.from_user.id
+    if uid not in user_data:
+        return
+
+    if "username" not in user_data[uid]:
+        user_data[uid]["username"] = update.message.text
+        keyboard = [
+            [InlineKeyboardButton("🚫 Spam", callback_data="reason_spam")],
+            [InlineKeyboardButton("❓ Other", callback_data="reason_other")]
+        ]
+        await update.message.reply_text("⚡ Select report reason:",
+                                        reply_markup=InlineKeyboardMarkup(keyboard))
+
+    elif "reason" not in user_data[uid]:
+        # shouldn’t happen since we use buttons
+        pass
+
+    elif "message" not in user_data[uid]:
+        user_data[uid]["message"] = update.message.text
+        await update.message.reply_text("📝 Now send number of reports to send:")
+
+    elif "count" not in user_data[uid]:
+        try:
+            user_data[uid]["count"] = int(update.message.text)
+        except:
+            await update.message.reply_text("❌ Invalid number, try again.")
+            return
+
+        await update.message.reply_text("⏳ Reports sending in background...")
+
+        # Background Task
+        asyncio.create_task(send_reports(uid, update, context))
+
+async def reason_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    uid = query.from_user.id
+    if query.data == "reason_spam":
+        user_data[uid]["reason"] = InputReportReasonSpam()
+    elif query.data == "reason_other":
+        user_data[uid]["reason"] = InputReportReasonOther()
+    await query.message.reply_text("✍️ Now send a message (reason details):")
+
+# ---------------- Run Bot ----------------
 def main():
-    app = Application.builder().token(BOT_TOKEN).build()
+    application = Application.builder().token("8249045464:AAEN5I2fPTRV6mcahJ41UD3tU1iGQckhw5s").build()
 
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CallbackQueryHandler(button, pattern="get_report"))
-    app.add_handler(CallbackQueryHandler(reason_handler, pattern="reason_.*"))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_handler))
+    application.add_handler(CommandHandler("start", start))
+    application.add_handler(CallbackQueryHandler(button_handler, pattern="get_report"))
+    application.add_handler(CallbackQueryHandler(reason_handler, pattern="reason_.*"))
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_handler))
 
-    app.run_polling()
+    application.run_polling()
 
 if __name__ == "__main__":
     main()
