@@ -32,14 +32,23 @@ async def send_reports(uid, update: Update, context: ContextTypes.DEFAULT_TYPE):
     count = data["count"]
 
     sessions = [f for f in os.listdir(SESSIONS_DIR) if f.endswith(".session")]
+    if not sessions:
+        await context.bot.send_message(chat_id=update.effective_chat.id,
+                                       text="❌ کوئی بھی session فائل نہیں ملی")
+        return
 
+    # --- سب clients connect کرو پہلے ---
+    clients = []
     for sess in sessions:
         client = TelegramClient(os.path.join(SESSIONS_DIR, sess), API_ID, API_HASH)
         await client.start()
-        for i in range(count):
+        clients.append((sess, client))
+
+    # --- cycle wise reports ---
+    for i in range(count):
+        for sess, client in clients:
             try:
                 resp = await client(ReportPeerRequest(peer=target, reason=reason, message=msg))
-                # --- اصل response دکھاؤ ---
                 if hasattr(resp, "to_dict"):
                     resp_text = str(resp.to_dict())
                 else:
@@ -54,9 +63,12 @@ async def send_reports(uid, update: Update, context: ContextTypes.DEFAULT_TYPE):
                     chat_id=update.effective_chat.id,
                     text=f"[{sess}] ERROR: {e}"
                 )
-            await asyncio.sleep(5)  # delay between each report
-        await client.disconnect()
 
+            await asyncio.sleep(5)  # delay ہر report کے بعد
+
+    # --- آخر میں سب disconnect کرو ---
+    for _, client in clients:
+        await client.disconnect()
 # ---------------- Bot Handlers ----------------
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [[InlineKeyboardButton("📣 Get User Report", callback_data="get_report")]]
